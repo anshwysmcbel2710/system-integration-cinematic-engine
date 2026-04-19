@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Turn Disconnected Tools Into One System — 60s Cinematic</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{
+    width:100%;height:100%;overflow:hidden;
+    background:#040608;font-family:monospace;
+  }
+  canvas{
+    display:block;
+    position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    max-width:100vw;max-height:100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="cv" width="960" height="540"></canvas>
+
+<script>
+(function(){
+"use strict";
+
+/* ═══════════════════════════════════════════
+   CANVAS + CONTEXT
+═══════════════════════════════════════════ */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = 960, H = 540;
+
+// Keep canvas filling the viewport at correct aspect ratio
+function resizeCanvas(){
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const scale=Math.min(vw/W, vh/H);
+  cv.style.width  = (W*scale)+'px';
+  cv.style.height = (H*scale)+'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+/* ═══════════════════════════════════════════
+   TIMING — 60 seconds total
+═══════════════════════════════════════════ */
+let t0 = null, ms = 0, raf = null;
+const TOTAL = 60000;
+
+/* ═══════════════════════════════════════════
+   MATH HELPERS
+═══════════════════════════════════════════ */
+const clamp      = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const prog       = (v,a,b)     => clamp((v-a)/(b-a));
+const lerp       = (a,b,t)     => a + (b-a)*t;
+const easeOut    = t => 1-(1-t)*(1-t);
+const easeIn     = t => t*t;
+const easeInOut  = t => t<.5 ? 2*t*t : 1-((-2*t+2)**2)/2;
+const easeOutCubic = t => 1-(1-t)**3;
+const ri = Math.round;
+const rnd = () => Math.random();
+const τ = Math.PI*2;
+
+/* ═══════════════════════════════════════════
+   COLOR PALETTE  (dark base + soft gold)
+═══════════════════════════════════════════ */
+const C = {
+  bg   : '#040608',
+  bg2  : '#070A12',
+  saf  : '#EF9F27',
+  gold : '#FAC775',
+  ember: '#E8670A',
+  teal : '#5DCAA5',
+  blue : '#378ADD',
+  red  : '#E24B4A',
+  green: '#1D9E75',
+  white: '#DCE8FF',
+  dim  : '#8899BB',
+  mute : '#3A4465',
+  purple:'#A78BFA',
+};
+function hexToRgb(h){
+  const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);
+  return [r,g,b];
+}
+function rgba(hex,a){ const[r,g,b]=hexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
+
+/* ═══════════════════════════════════════════
+   ROUNDED RECT
+═══════════════════════════════════════════ */
+function rrect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+/* ═══════════════════════════════════════════
+   TEXT OVERLAY
+═══════════════════════════════════════════ */
+function drawText(text, y, alpha, opts={}){
+  if(alpha<=0.005) return;
+  const size  = opts.size  || 22;
+  const color = opts.color || C.white;
+  const wt    = opts.weight|| '400';
+  const font  = opts.font  || '-apple-system,sans-serif';
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `${wt} ${size}px ${font}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if(opts.glow){ ctx.shadowColor=opts.glow; ctx.shadowBlur=18; }
+  ctx.fillText(text, W/2, y);
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════
+   BACKGROUND
+═══════════════════════════════════════════ */
+function drawBg(tint, tintAlpha){
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0,0,W,H);
+  for(let y=0;y<H;y+=4){ ctx.fillStyle='rgba(0,0,0,0.022)'; ctx.fillRect(0,y,W,2); }
+  const vg=ctx.createRadialGradient(W/2,H/2,H*0.18,W/2,H/2,H*0.92);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,'rgba(0,0,0,0.6)');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  if(tint && tintAlpha>0.005){
+    const[r,g,b]=hexToRgb(tint);
+    ctx.fillStyle=`rgba(${r},${g},${b},${tintAlpha})`;
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+/* ═══════════════════════════════════════════
+   TOOL NODES
+═══════════════════════════════════════════ */
+const TOOLS = [
+  {id:'crm', label:'CRM',       color:C.saf },
+  {id:'erp', label:'ERP',       color:C.blue},
+  {id:'db',  label:'DATABASE',  color:C.teal},
+  {id:'ana', label:'ANALYTICS', color:C.gold},
+  {id:'api', label:'API HUB',   color:C.ember},
+  {id:'que', label:'QUEUE',     color:C.purple},
+];
+
+const CHAOS_POS=[
+  {x:160,y:160},{x:800,y:140},{x:130,y:380},{x:820,y:400},
+  {x:480,y:90}, {x:480,y:450},
+];
+const ARCH_POS=[
+  {x:100,y:270},{x:256,y:270},{x:480,y:270},{x:704,y:270},{x:860,y:270}
+];
+
+/* ═══════════════════════════════════════════
+   DRAW NODE
+═══════════════════════════════════════════ */
+function drawNode(x,y,tool,alpha,scale=1,pulse=0){
+  if(alpha<0.01) return;
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  ctx.translate(x,y); ctx.scale(scale,scale);
+  const w=84,h=44,r=8;
+  if(pulse>0){
+    ctx.beginPath();
+    ctx.arc(0,0,(w/2+12+8*pulse),0,τ);
+    ctx.strokeStyle=rgba(tool.color,0.18*pulse);
+    ctx.lineWidth=2; ctx.stroke();
+  }
+  rrect(-w/2,-h/2,w,h,r);
+  ctx.fillStyle=rgba(tool.color,0.12); ctx.fill();
+  ctx.strokeStyle=tool.color; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.font='600 10px -apple-system,sans-serif';
+  ctx.fillStyle=tool.color;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(tool.label,0,0);
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════
+   DRAW LINE
+═══════════════════════════════════════════ */
+function drawLine(x1,y1,x2,y2,alpha,color,dashed,progress=1){
+  if(alpha<0.01) return;
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  ctx.beginPath();
+  const lx=lerp(x1,x2,progress), ly=lerp(y1,y2,progress);
+  ctx.moveTo(x1,y1); ctx.lineTo(lx,ly);
+  ctx.strokeStyle=color||C.blue; ctx.lineWidth=1.2;
+  if(dashed) ctx.setLineDash([6,10]);
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════
+   GLITCH
+═══════════════════════════════════════════ */
+function glitch(intensity){
+  if(intensity<0.01) return;
+  for(let i=0;i<4;i++){
+    const sy=rnd()*H, sh=2+rnd()*14, ox=(rnd()-.5)*18*intensity;
+    ctx.save(); ctx.globalAlpha=0.5*intensity;
+    const imgd=ctx.getImageData(0,sy,W,sh);
+    ctx.putImageData(imgd,ox,sy);
+    ctx.restore();
+  }
+  ctx.save(); ctx.globalAlpha=0.06*intensity;
+  ctx.fillStyle=rgba(C.red,1);
+  ctx.fillRect(0,~~(rnd()*H),W,~~(2+rnd()*6));
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════
+   AMBIENT PARTICLES
+═══════════════════════════════════════════ */
+let particles=[];
+function resetParticles(){
+  particles=[];
+  for(let i=0;i<100;i++) particles.push(makeParticle());
+}
+function makeParticle(){
+  return {
+    x:rnd()*W, y:rnd()*H,
+    vx:(rnd()-.5)*0.5, vy:(rnd()-.5)*0.35,
+    sz:0.3+rnd()*1.2, a:0.04+rnd()*0.14,
+    col:[C.saf,C.blue,C.teal][~~(rnd()*3)],
+  };
+}
+resetParticles();
+function updateParticles(){
+  particles.forEach(p=>{
+    p.x+=p.vx; p.y+=p.vy;
+    if(p.x<0)p.x=W; if(p.x>W)p.x=0;
+    if(p.y<0)p.y=H; if(p.y>H)p.y=0;
+  });
+}
+
+/* ═══════════════════════════════════════════
+   FLOW PARTICLES (architecture data flow)
+═══════════════════════════════════════════ */
+let flowParts=[];
+function resetFlow(){
+  flowParts=[];
+  for(let i=0;i<60;i++) flowParts.push(makeFlowPart());
+}
+function makeFlowPart(){
+  const paths=[
+    [{x:100,y:270},{x:256,y:270}],
+    [{x:256,y:270},{x:480,y:270}],
+    [{x:480,y:270},{x:704,y:270}],
+    [{x:704,y:270},{x:860,y:270}],
+    [{x:200,y:200},{x:480,y:270}],
+  ];
+  const path=paths[~~(rnd()*paths.length)];
+  return{
+    fx:path[0].x,fy:path[0].y,
+    tx:path[1].x,ty:path[1].y,
+    p:rnd(),spd:0.004+rnd()*0.008,
+    sz:1.5+rnd()*2,
+    col:[C.saf,C.gold,C.teal,C.blue][~~(rnd()*4)],
+    a:0.5+rnd()*0.5
+  };
+}
+resetFlow();
+function updateFlow(){
+  flowParts.forEach(p=>{
+    p.p+=p.spd;
+    if(p.p>=1){ Object.assign(p,makeFlowPart()); p.p=0; }
+  });
+}
+
+/* ═══════════════════════════════════════════
+   SCENE DEFINITIONS — 8 scenes = 60 seconds
+═══════════════════════════════════════════ */
+const SCENES=[
+  {name:'CHAOS',            start:0,     end:10000, col:C.red},
+  {name:'FRICTION',         start:10000, end:20000, col:'#CC6633'},
+  {name:'INTEGRATION INTRO',start:20000, end:30000, col:C.saf},
+  {name:'SYSTEM FORMATION', start:30000, end:40000, col:C.blue},
+  {name:'EXECUTION FLOW',   start:40000, end:48000, col:C.gold},
+  {name:'DATA VISIBILITY',  start:48000, end:54000, col:C.teal},
+  {name:'IMPACT',           start:54000, end:58000, col:C.green},
+  {name:'FINAL STATE',      start:58000, end:60000, col:C.saf},
+];
+function getScene(){ return SCENES.find(s=>ms>=s.start&&ms<s.end)||SCENES[SCENES.length-1]; }
+function sp(scene){ return prog(ms,scene.start,scene.end); }
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 1 — CHAOS  (0–10s)
+   Multiple isolated systems, no connections, jitter, glitch
+═══════════════════════════════════════════════════════════ */
+function scene1(){
+  const p=sp(SCENES[0]);
+  const ep=easeOut(p);
+  drawBg(C.red, 0.02+0.03*Math.sin(ms/300));
+
+  // Ambient particles
+  particles.forEach(pt=>{
+    ctx.save(); ctx.globalAlpha=pt.a*0.45;
+    ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,τ);
+    ctx.fillStyle=pt.col; ctx.fill(); ctx.restore();
+  });
+
+  // 4 isolated floating tools
+  TOOLS.slice(0,4).forEach((tool,i)=>{
+    const cp=CHAOS_POS[i];
+    const drift  =Math.sin(ms/800+i*1.5)*14;
+    const driftY =Math.cos(ms/650+i*2.1)*9;
+    const alpha  =easeOut(prog(ms,i*200,i*200+900));
+    const sc     =0.88+0.08*Math.sin(ms/430+i);
+    const pulse  =0.45+0.55*Math.sin(ms/360+i*0.9);
+    drawNode(cp.x+drift,cp.y+driftY,tool,alpha,sc,pulse);
+  });
+
+  // Broken dashed connections, flickering
+  [[0,1],[2,3],[0,2],[1,3]].forEach(([a,b],li)=>{
+    const pa=CHAOS_POS[a],pb=CHAOS_POS[b];
+    const flicker=0.12+0.14*Math.sin(ms/210+li*1.7);
+    drawLine(pa.x,pa.y,pb.x,pb.y,flicker,C.red,true);
+  });
+
+  // Warning "!" symbols pulsing
+  [0,1,2,3].forEach(i=>{
+    const pos=CHAOS_POS[i];
+    const wa=easeOut(prog(ms,i*320,i*320+1100))*(0.45+0.55*Math.sin(ms/190+i*2.2));
+    ctx.save(); ctx.globalAlpha=wa;
+    ctx.font='bold 19px sans-serif'; ctx.fillStyle=C.red;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(i%2===0?'!':'?',pos.x+(i%2===0?52:-52),pos.y-32);
+    ctx.restore();
+  });
+
+  // ERR badges on nodes
+  [0,1,3].forEach((idx,j)=>{
+    const pos=CHAOS_POS[idx];
+    const ba=easeOut(prog(ms,j*500+600,j*500+1400));
+    ctx.save(); ctx.globalAlpha=ba;
+    rrect(pos.x+46,pos.y-9,30,18,4);
+    ctx.fillStyle=rgba(C.red,0.2); ctx.fill();
+    ctx.strokeStyle=C.red; ctx.lineWidth=1; ctx.stroke();
+    ctx.font='700 9px monospace'; ctx.fillStyle=C.red;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('ERR',pos.x+61,pos.y);
+    ctx.restore();
+  });
+
+  // Growing glitch as scene progresses
+  const glitchI=easeIn(prog(ms,5000,10000))*0.55;
+  if(glitchI>0.04) glitch(glitchI*Math.abs(Math.sin(ms/90)));
+
+  // Red flash pulse
+  const flash=Math.max(0,Math.sin(ms/320))*0.04;
+  ctx.fillStyle=`rgba(226,75,74,${flash})`; ctx.fillRect(0,0,W,H);
+
+  const textA=easeOut(prog(ms,1000,2500))*(1-easeIn(prog(ms,8800,10000)));
+  drawText('Disconnected systems create hidden chaos',H-72,textA,{size:21,color:rgba(C.red,0.95),weight:'500'});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 2 — FRICTION  (10–20s)
+   Manual workflows, copy/paste, broken arrows, delays
+═══════════════════════════════════════════════════════════ */
+function scene2(){
+  const p=sp(SCENES[1]);
+  const ep=easeOut(p);
+  drawBg('#240E06',0.045+0.03*Math.sin(ms/210));
+
+  // Scattered, dim tools
+  TOOLS.slice(0,4).forEach((tool,i)=>{
+    const cp=CHAOS_POS[i];
+    const jitter=(rnd()-.5)*3;
+    drawNode(cp.x+jitter,cp.y+jitter,tool,0.5,0.86);
+  });
+
+  // Broken X connections
+  [[0,1],[2,3],[1,2]].forEach(([a,b])=>{
+    const pa=CHAOS_POS[a],pb=CHAOS_POS[b];
+    const flic=0.1+0.2*Math.sin(ms/155+a);
+    drawLine(pa.x,pa.y,pb.x,pb.y,flic,C.red,true);
+    const mx=(pa.x+pb.x)/2,my=(pa.y+pb.y)/2;
+    ctx.save(); ctx.globalAlpha=(0.35+0.4*Math.sin(ms/130+a))*ep;
+    ctx.font='bold 17px sans-serif'; ctx.fillStyle=C.red;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('✕',mx,my); ctx.restore();
+  });
+
+  // Repeating human → drag → repeat cycle
+  const cycleMs=ms-10000;
+  const cycle=(cycleMs%3200)/3200;
+  const hx=lerp(CHAOS_POS[0].x+55,CHAOS_POS[1].x-55,easeInOut(cycle));
+  const hy=lerp(CHAOS_POS[0].y,CHAOS_POS[1].y,easeInOut(cycle));
+  const personA=easeOut(prog(ms,10600,11800));
+
+  ctx.save(); ctx.globalAlpha=personA*0.9;
+  ctx.strokeStyle=C.gold; ctx.lineWidth=2.5; ctx.lineCap='round';
+  ctx.beginPath(); ctx.arc(hx,hy-22,8,0,τ); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx,hy-14); ctx.lineTo(hx,hy+8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx,hy-6);  ctx.lineTo(hx+14,hy-2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx,hy-6);  ctx.lineTo(hx-10,hy+2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx,hy+8);  ctx.lineTo(hx+8,hy+20); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx,hy+8);  ctx.lineTo(hx-8,hy+20); ctx.stroke();
+  ctx.restore();
+
+  // Dragged DATA packet
+  ctx.save(); ctx.globalAlpha=personA*0.9;
+  rrect(hx+16,hy-11,38,22,4);
+  ctx.fillStyle=rgba(C.saf,0.18); ctx.fill();
+  ctx.strokeStyle=C.saf; ctx.lineWidth=1; ctx.stroke();
+  ctx.font='600 9px monospace'; ctx.fillStyle=C.saf;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('DATA',hx+35,hy); ctx.restore();
+
+  // Second person (bottom path)
+  const cycle2=((cycleMs+1600)%3200)/3200;
+  const hx2=lerp(CHAOS_POS[2].x+55,CHAOS_POS[3].x-55,easeInOut(cycle2));
+  const hy2=lerp(CHAOS_POS[2].y,CHAOS_POS[3].y,easeInOut(cycle2));
+  ctx.save(); ctx.globalAlpha=personA*0.62;
+  ctx.strokeStyle=C.dim; ctx.lineWidth=2; ctx.lineCap='round';
+  ctx.beginPath(); ctx.arc(hx2,hy2-22,8,0,τ); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx2,hy2-14); ctx.lineTo(hx2,hy2+8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx2,hy2-6);  ctx.lineTo(hx2+14,hy2-2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx2,hy2-6);  ctx.lineTo(hx2-10,hy2+2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx2,hy2+8);  ctx.lineTo(hx2+8,hy2+20); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx2,hy2+8);  ctx.lineTo(hx2-8,hy2+20); ctx.stroke();
+  ctx.restore();
+
+  // Floating COPY / PASTE labels along top path
+  const cpCycle=(cycleMs%2400)/2400;
+  const cfx=cpCycle<0.5
+    ? lerp(CHAOS_POS[0].x,CHAOS_POS[1].x,cpCycle*2)
+    : lerp(CHAOS_POS[0].x,CHAOS_POS[1].x,(cpCycle-.5)*2);
+  const cfy=cpCycle<0.5
+    ? lerp(CHAOS_POS[0].y,CHAOS_POS[1].y,cpCycle*2)-24
+    : lerp(CHAOS_POS[0].y,CHAOS_POS[1].y,(cpCycle-.5)*2)-24;
+  ctx.save();
+  ctx.globalAlpha=ep*(cpCycle<0.5?(1-cpCycle*2)+0.1:(cpCycle-.5)*2+0.1)*0.8;
+  ctx.font='700 9px monospace'; ctx.fillStyle=cpCycle<0.5?C.saf:C.gold;
+  ctx.textAlign='center'; ctx.fillText(cpCycle<0.5?'COPY':'PASTE',cfx,cfy);
+  ctx.restore();
+
+  // DELAYED badges
+  [CHAOS_POS[1],CHAOS_POS[2]].forEach((pos,i)=>{
+    const da=easeOut(prog(ms,12000+i*700,13200+i*700))*(0.55+0.45*Math.sin(ms/310+i));
+    ctx.save(); ctx.globalAlpha=da;
+    ctx.font='700 9px monospace'; ctx.fillStyle=rgba(C.red,0.92);
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('DELAYED',pos.x,pos.y+40); ctx.restore();
+  });
+
+  // Lagging broken arrows (slow progress lines)
+  const lagP=prog(ms,10800,13500);
+  drawLine(CHAOS_POS[0].x,CHAOS_POS[0].y,CHAOS_POS[1].x,CHAOS_POS[1].y,0.12,C.dim,true,lagP);
+  const lagP2=prog(ms,11400,14000);
+  drawLine(CHAOS_POS[2].x,CHAOS_POS[2].y,CHAOS_POS[3].x,CHAOS_POS[3].y,0.12,C.dim,true,lagP2);
+
+  // Glitch
+  glitch(0.2+0.2*Math.sin(ms/120));
+  // Red flash
+  const flash=Math.max(0,Math.sin(ms/260))*0.045;
+  ctx.fillStyle=`rgba(226,75,74,${flash})`; ctx.fillRect(0,0,W,H);
+
+  const textA=easeOut(prog(ms,11200,13000))*(1-easeIn(prog(ms,19000,20000)));
+  drawText('Data is fragmented. Work is duplicated.',H-72,textA,{size:21,color:rgba(C.red,0.92),weight:'500'});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 3 — INTEGRATION INTRO  (20–30s)
+   Central API node emerges, systems slowly connect
+═══════════════════════════════════════════════════════════ */
+function scene3(){
+  const p=sp(SCENES[2]);
+  const ep=easeOut(p);
+  drawBg(C.saf,0.015+0.018*ep);
+
+  // Scattered tools brightening
+  TOOLS.slice(0,4).forEach((tool,i)=>{
+    const cp=CHAOS_POS[i];
+    const drift =Math.sin(ms/900+i*1.3)*9;
+    const driftY=Math.cos(ms/720+i*2)*7;
+    const alpha=0.42+0.28*ep;
+    drawNode(cp.x+drift,cp.y+driftY,tool,alpha,0.9);
+  });
+
+  // API HUB emerges at center
+  const apiA=easeOutCubic(prog(ms,20600,22800));
+  const apiSc=easeOutCubic(prog(ms,20600,22200));
+  const pR=42+22*apiSc+16*Math.sin(ms/230);
+
+  // Glow rings
+  [4,3,2,1].forEach(ring=>{
+    ctx.save(); ctx.globalAlpha=apiA*0.055*ring;
+    ctx.beginPath(); ctx.arc(W/2,H/2,pR*ring*0.62,0,τ);
+    ctx.strokeStyle=C.saf; ctx.lineWidth=ring*2; ctx.stroke();
+    ctx.restore();
+  });
+
+  if(apiA>0.01) drawNode(W/2,H/2,TOOLS[4],apiA,apiSc,0.5+0.5*Math.sin(ms/280));
+
+  // Lines draw from each tool to API hub (staggered 22.5→28s)
+  [[CHAOS_POS[0],{x:W/2,y:H/2}],
+   [CHAOS_POS[1],{x:W/2,y:H/2}],
+   [CHAOS_POS[2],{x:W/2,y:H/2}],
+   [CHAOS_POS[3],{x:W/2,y:H/2}]].forEach(([from,to],i)=>{
+    const lStart=22800+i*1400;
+    const lP=easeOut(prog(ms,lStart,lStart+2200));
+    if(lP>0){
+      drawLine(from.x,from.y,to.x,to.y,0.65,TOOLS[i].color,false,lP);
+      if(lP>0.08){
+        const pp=(ms/820+i*0.38)%1;
+        const tx=lerp(from.x,to.x,pp), ty=lerp(from.y,to.y,pp);
+        ctx.save(); ctx.globalAlpha=0.9;
+        ctx.beginPath(); ctx.arc(tx,ty,3.5,0,τ);
+        ctx.fillStyle=TOOLS[i].color; ctx.fill(); ctx.restore();
+      }
+    }
+  });
+
+  // Pulse rings expanding from center once connected
+  const connA=easeOut(prog(ms,27200,28500));
+  if(connA>0.01){
+    const ringMs=ms-27200;
+    for(let r=0;r<3;r++){
+      const phase=((ringMs/900+r/3)%1);
+      ctx.save(); ctx.globalAlpha=connA*(1-phase)*0.28;
+      ctx.beginPath(); ctx.arc(W/2,H/2,85*phase,0,τ);
+      ctx.strokeStyle=C.saf; ctx.lineWidth=2; ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // "CONNECTED" label fades in
+  const conLabelA=easeOut(prog(ms,28000,29000))*(1-easeIn(prog(ms,29200,30000)));
+  ctx.save(); ctx.globalAlpha=conLabelA;
+  ctx.font='700 10px monospace'; ctx.fillStyle=C.gold;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('● ALL SYSTEMS CONNECTED',W/2,52);
+  ctx.restore();
+
+  const textA=easeOut(prog(ms,21200,23000))*(1-easeIn(prog(ms,29000,30000)));
+  drawText('Integration is the backbone',H-72,textA,{size:21,color:C.saf,weight:'600',glow:C.saf});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 4 — SYSTEM FORMATION  (30–40s)
+   Architecture builds: CRM ↔ API ↔ ERP ↔ DB ↔ Analytics
+═══════════════════════════════════════════════════════════ */
+function scene4(){
+  const p=sp(SCENES[3]);
+  const ep=easeOut(p);
+  drawBg(C.blue,0.02+0.018*ep);
+
+  // Grid alignment lines (subtle depth)
+  const gridA=ep*0.065;
+  for(let x=0;x<W;x+=80){
+    ctx.save(); ctx.globalAlpha=gridA;
+    ctx.strokeStyle=C.blue; ctx.lineWidth=1;
+    ctx.setLineDash([4,9]);
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
+  for(let y=0;y<H;y+=80){
+    ctx.save(); ctx.globalAlpha=gridA*0.7;
+    ctx.strokeStyle=C.blue; ctx.lineWidth=1;
+    ctx.setLineDash([4,9]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
+
+  // Architecture: CRM, API HUB, ERP, DATABASE, ANALYTICS
+  const archTools=[TOOLS[0],TOOLS[4],TOOLS[1],TOOLS[2],TOOLS[3]];
+  // Morph from chaos positions to architecture row (30→33.5s)
+  const fromPos=[CHAOS_POS[0],CHAOS_POS[4],CHAOS_POS[1],CHAOS_POS[2],CHAOS_POS[3]];
+  const morphP=easeInOut(prog(ms,30000,33500));
+
+  archTools.forEach((tool,i)=>{
+    const from=fromPos[i]||ARCH_POS[i];
+    const x=lerp(from.x,ARCH_POS[i].x,morphP);
+    const y=lerp(from.y,ARCH_POS[i].y,morphP);
+    const na=easeOut(prog(ms,30000+i*180,30000+i*180+1400));
+    const pulse=0.25*Math.sin(ms/380+i);
+    drawNode(x,y,tool,na,0.96+0.04*ep,pulse);
+  });
+
+  // Connections appear after morph (34→36s)
+  const connA=easeOut(prog(ms,34000,36000));
+  for(let i=0;i<ARCH_POS.length-1;i++){
+    drawLine(ARCH_POS[i].x+42,ARCH_POS[i].y,ARCH_POS[i+1].x-42,ARCH_POS[i+1].y,connA*0.78,C.blue);
+    if(connA>0.5){
+      const mx=(ARCH_POS[i].x+ARCH_POS[i+1].x)/2;
+      ctx.save(); ctx.globalAlpha=connA*0.6;
+      ctx.font='12px monospace'; ctx.fillStyle=C.blue;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('⇄',mx,H/2-34); ctx.restore();
+    }
+  }
+
+  // Flow particles traveling the architecture
+  updateFlow();
+  if(connA>0.3){
+    flowParts.forEach(fp=>{
+      ctx.save(); ctx.globalAlpha=connA*fp.a*0.85;
+      const fx=lerp(fp.fx,fp.tx,easeInOut(fp.p));
+      const fy=lerp(fp.fy,fp.ty,easeInOut(fp.p));
+      ctx.beginPath(); ctx.arc(fx,fy,fp.sz,0,τ);
+      ctx.fillStyle=fp.col; ctx.fill(); ctx.restore();
+    });
+  }
+
+  // Sub-labels under nodes
+  const lblA=easeOut(prog(ms,35500,37000));
+  if(lblA>0.01){
+    const lbls=['CRM','API HUB','ERP','DATABASE','ANALYTICS'];
+    ARCH_POS.forEach((pos,i)=>{
+      ctx.save(); ctx.globalAlpha=lblA*0.5;
+      ctx.font='400 8px monospace'; ctx.fillStyle=C.dim;
+      ctx.textAlign='center'; ctx.textBaseline='top';
+      ctx.fillText(lbls[i],pos.x,pos.y+30); ctx.restore();
+    });
+  }
+
+  // Data packets pulsing through the row
+  const pkA=easeOut(prog(ms,36000,37500));
+  if(pkA>0.01){
+    for(let i=0;i<ARCH_POS.length-1;i++){
+      const pp=((ms/900+i*0.22)%1);
+      const px=lerp(ARCH_POS[i].x+42,ARCH_POS[i+1].x-42,pp);
+      ctx.save(); ctx.globalAlpha=pkA*0.85;
+      ctx.beginPath(); ctx.arc(px,H/2,3.5,0,τ);
+      ctx.fillStyle=archTools[i].color; ctx.fill(); ctx.restore();
+    }
+  }
+
+  const textA=easeOut(prog(ms,31500,33500))*(1-easeIn(prog(ms,39000,40000)));
+  drawText('Unified system architecture',H-72,textA,{size:21,color:C.blue,weight:'600',glow:C.blue});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 5 — EXECUTION FLOW  (40–48s)
+   Trigger → Event Bus → Worker → System → Output
+═══════════════════════════════════════════════════════════ */
+function scene5(){
+  const p=sp(SCENES[4]);
+  const ep=easeOut(p);
+  drawBg(C.gold,0.015);
+
+  // Pipeline nodes
+  const pipe=[
+    {x:100, y:H/2, label:'TRIGGER',   col:C.saf},
+    {x:275, y:H/2, label:'EVENT BUS', col:C.blue},
+    {x:480, y:H/2, label:'WORKER',    col:C.purple},
+    {x:690, y:H/2, label:'SYSTEM',    col:C.teal},
+    {x:870, y:H/2, label:'OUTPUT',    col:C.green},
+  ];
+
+  // Nodes stagger in (40→42.5s)
+  pipe.forEach((node,i)=>{
+    const na=easeOutCubic(prog(ms,40000+i*500,40000+i*500+1300));
+    ctx.save(); ctx.globalAlpha=na;
+    rrect(node.x-52,node.y-25,104,50,8);
+    ctx.fillStyle=rgba(node.col,0.12); ctx.fill();
+    ctx.strokeStyle=node.col; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.font='700 10px monospace'; ctx.fillStyle=node.col;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(node.label,node.x,node.y);
+    ctx.restore();
+    // Pulse ring
+    const pulse=0.3+0.45*Math.sin(ms/320+i);
+    if(na>0.5){
+      ctx.save(); ctx.globalAlpha=na*pulse*0.2;
+      ctx.beginPath(); ctx.arc(node.x,node.y,40+14*pulse,0,τ);
+      ctx.strokeStyle=node.col; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
+    }
+    // Arrow to next
+    if(i<pipe.length-1){
+      const lna=easeOut(prog(ms,40000+i*500+900,40000+i*500+1700));
+      drawLine(node.x+52,node.y,pipe[i+1].x-52,node.y,lna*0.78,node.col);
+    }
+  });
+
+  // Continuous particle streams (42.5→48s)
+  const streamA=easeOut(prog(ms,42500,43800));
+  if(streamA>0.01){
+    for(let i=0;i<pipe.length-1;i++){
+      for(let k=0;k<5;k++){
+        const pp=((ms/560+i*0.28+k*0.2)%1);
+        const px=lerp(pipe[i].x+52,pipe[i+1].x-52,pp);
+        const py=pipe[i].y+Math.sin(pp*τ)*7;
+        ctx.save(); ctx.globalAlpha=streamA*0.82;
+        ctx.beginPath(); ctx.arc(px,py,2.8,0,τ);
+        ctx.fillStyle=[C.saf,C.gold,C.teal,C.white,C.blue][k]; ctx.fill(); ctx.restore();
+      }
+    }
+  }
+
+  // Trigger expand rings
+  const trigA=easeOut(prog(ms,40600,41800));
+  if(trigA>0.01){
+    const ringMs=ms-40600;
+    for(let r=0;r<3;r++){
+      const phase=((ringMs/1100+r/3)%1);
+      ctx.save(); ctx.globalAlpha=trigA*(1-phase)*0.32;
+      ctx.beginPath(); ctx.arc(pipe[0].x,pipe[0].y,52+34*phase,0,τ);
+      ctx.strokeStyle=C.saf; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+    }
+  }
+
+  // "AUTOMATED" badge
+  const ba=easeOut(prog(ms,44000,45200));
+  ctx.save(); ctx.globalAlpha=ba;
+  rrect(W/2-68,26,136,36,18);
+  ctx.fillStyle=rgba(C.green,0.12); ctx.fill();
+  ctx.strokeStyle=C.green; ctx.lineWidth=1; ctx.stroke();
+  ctx.font='700 11px monospace'; ctx.fillStyle=C.green;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('● FULLY AUTOMATED',W/2,44); ctx.restore();
+
+  // Data counter badge top-right
+  const ctrA=easeOut(prog(ms,44500,46000));
+  const count=~~((ms-44500)/15);
+  ctx.save(); ctx.globalAlpha=ctrA;
+  ctx.font='700 10px monospace'; ctx.fillStyle=C.gold;
+  ctx.textAlign='right'; ctx.textBaseline='top';
+  ctx.fillText(`EVENTS PROCESSED: ${Math.max(0,count).toLocaleString()}`,W-24,24);
+  ctx.restore();
+
+  const textA=easeOut(prog(ms,41200,43200))*(1-easeIn(prog(ms,47000,48000)));
+  drawText('Event-driven automation',H-72,textA,{size:21,color:C.gold,weight:'600',glow:C.gold});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 6 — DATA VISIBILITY  (48–54s)
+   Dashboard: metrics, logs, charts, real-time updates
+═══════════════════════════════════════════════════════════ */
+function scene6(){
+  const p=sp(SCENES[5]);
+  const ep=easeOut(p);
+  drawBg(C.teal,0.02);
+
+  // Subtle parallax bg dots
+  particles.forEach(pt=>{
+    ctx.save(); ctx.globalAlpha=pt.a*0.3;
+    ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,τ);
+    ctx.fillStyle=C.teal; ctx.fill(); ctx.restore();
+  });
+
+  // Dashboard panel
+  const dw=720, dh=390, dx=W/2-dw/2, dy=H/2-dh/2;
+  ctx.save(); ctx.globalAlpha=ep;
+
+  // Panel BG
+  rrect(dx,dy,dw,dh,12);
+  ctx.fillStyle='rgba(3,5,16,0.95)'; ctx.fill();
+  ctx.strokeStyle=rgba(C.teal,0.45); ctx.lineWidth=1.5; ctx.stroke();
+
+  // Title bar
+  rrect(dx,dy,dw,40,12);
+  ctx.fillStyle=rgba(C.teal,0.1); ctx.fill();
+  ctx.font='700 11px monospace'; ctx.fillStyle=C.teal;
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText('● SYSTEM HEALTH DASHBOARD',dx+16,dy+20);
+  // Live clock
+  const clockS=~~(((ms-48000)/1000)%60);
+  ctx.font='700 10px monospace'; ctx.fillStyle=C.green;
+  ctx.textAlign='right';
+  ctx.fillText(`LIVE  00:${clockS<10?'0':''}${clockS}`,dx+dw-16,dy+20);
+
+  // KPI boxes (staggered entry)
+  const kpis=[
+    {label:'UPTIME',    val:'99.99%',col:C.green},
+    {label:'LATENCY',   val:'34ms',  col:C.teal},
+    {label:'THROUGHPUT',val:'12k/s', col:C.saf},
+    {label:'COST SAVED',val:'40%',   col:C.gold},
+  ];
+  kpis.forEach((k,i)=>{
+    const kna=easeOut(prog(ms,48300+i*220,48300+i*220+900));
+    const kx=dx+14+i*(dw-28)/4, ky=dy+58;
+    const kw=(dw-42)/4, kh=70;
+    ctx.save(); ctx.globalAlpha=ep*kna;
+    rrect(kx,ky,kw,kh,6);
+    ctx.fillStyle=rgba(k.col,0.1); ctx.fill();
+    ctx.strokeStyle=rgba(k.col,0.28); ctx.lineWidth=1; ctx.stroke();
+    ctx.font='700 21px -apple-system,sans-serif'; ctx.fillStyle=k.col;
+    ctx.textAlign='center'; ctx.fillText(k.val,kx+kw/2,ky+38);
+    ctx.font='400 9px monospace'; ctx.fillStyle=rgba(k.col,0.6);
+    ctx.fillText(k.label,kx+kw/2,ky+59); ctx.restore();
+  });
+
+  // Bar chart — PIPELINE VELOCITY
+  const bw=140,bh=115,bx=dx+16,by=dy+150;
+  const bars=[0.38,0.52,0.48,0.72,0.68,0.84,easeOut(prog(ms,49800,52200))];
+  ctx.font='700 9px monospace'; ctx.fillStyle=rgba(C.dim,0.55); ctx.textAlign='left';
+  ctx.fillText('PIPELINE VELOCITY',bx,by-12);
+  bars.forEach((bv,i)=>{
+    const bh2=bh*bv*ep;
+    const bx2=bx+i*(bw/bars.length+1);
+    rrect(bx2,by+bh-bh2,bw/bars.length-1,bh2,2);
+    ctx.fillStyle=i===bars.length-1?C.saf:rgba(C.blue,0.52); ctx.fill();
+  });
+
+  // Line chart — RESPONSE TIME
+  const lx=dx+210,ly=dy+150,lw=240,lh=115;
+  ctx.font='700 9px monospace'; ctx.fillStyle=rgba(C.dim,0.55); ctx.textAlign='left';
+  ctx.fillText('RESPONSE TIME',lx,ly-12);
+  const pts=[[0,0.82],[0.16,0.66],[0.3,0.7],[0.46,0.5],[0.61,0.42],[0.76,0.28],[1,0.17]];
+  const lineP=easeOut(prog(ms,49000,51500));
+  const dc=Math.ceil(pts.length*lineP);
+  if(dc>1){
+    ctx.beginPath();
+    pts.slice(0,dc).forEach(([x,y],i)=>{
+      const px=lx+x*lw,py=ly+y*lh;
+      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    });
+    ctx.strokeStyle=C.teal; ctx.lineWidth=2; ctx.stroke();
+    pts.slice(0,dc).forEach(([x,y])=>{
+      ctx.beginPath(); ctx.arc(lx+x*lw,ly+y*lh,3,0,τ);
+      ctx.fillStyle=C.teal; ctx.fill();
+    });
+  }
+
+  // Service status list
+  const slx=dx+500,sly=dy+58;
+  const statuses=[
+    {label:'CRM',    status:'HEALTHY',   col:C.green},
+    {label:'ERP',    status:'HEALTHY',   col:C.green},
+    {label:'DATABASE',status:'HEALTHY',  col:C.green},
+    {label:'API HUB',status:'HEALTHY',   col:C.green},
+    {label:'QUEUE',  status:'2 PENDING', col:C.saf},
+  ];
+  ctx.font='700 9px monospace'; ctx.fillStyle=rgba(C.dim,0.55); ctx.textAlign='left';
+  ctx.fillText('SERVICE STATUS',slx,sly);
+  statuses.forEach((s,i)=>{
+    const sna=easeOut(prog(ms,49200+i*200,49200+i*200+800));
+    const sy=sly+18+i*30;
+    ctx.save(); ctx.globalAlpha=ep*sna;
+    ctx.font='400 10px monospace'; ctx.fillStyle=C.dim;
+    ctx.fillText(s.label,slx,sy+12);
+    ctx.font='700 10px monospace'; ctx.fillStyle=s.col;
+    ctx.fillText(s.status,slx+94,sy+12);
+    ctx.beginPath(); ctx.arc(slx+84,sy+8,4,0,τ);
+    ctx.fillStyle=s.col; ctx.fill(); ctx.restore();
+  });
+
+  ctx.restore();
+
+  const textA=easeOut(prog(ms,48700,50500))*(1-easeIn(prog(ms,53200,54000)));
+  drawText('Real-time data synchronization',dy-34,textA,{size:20,color:C.teal,weight:'600',glow:C.teal});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 7 — IMPACT  (54–58s)
+   Efficiency graph rising, counter up to 60%
+═══════════════════════════════════════════════════════════ */
+function scene7(){
+  const p=sp(SCENES[6]);
+  const ep=easeOut(p);
+  drawBg(C.green,0.02);
+
+  const gx=155,gy=105,gw=650,gh=255;
+  ctx.save(); ctx.globalAlpha=ep;
+
+  // Grid lines
+  for(let i=0;i<=4;i++){
+    ctx.strokeStyle=rgba(C.mute,0.28); ctx.lineWidth=1;
+    ctx.setLineDash([4,8]);
+    ctx.beginPath();
+    ctx.moveTo(gx,gy+i*(gh/4)); ctx.lineTo(gx+gw,gy+i*(gh/4));
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.font='400 9px monospace'; ctx.fillStyle=rgba(C.dim,0.5);
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText(`${100-i*25}%`,gx-10,gy+i*(gh/4));
+  }
+
+  // Rising efficiency curve (54.1→57.2s)
+  const lineP=easeOut(prog(ms,54100,57200));
+  const segCount=28;
+  const pts=[];
+  for(let i=0;i<=segCount;i++){
+    const t=i/segCount;
+    const baseY=1-(0.36+0.64*easeOutCubic(t));
+    const jitter=Math.sin(t*22)*0.016;
+    pts.push({x:gx+t*gw, y:gy+(baseY+jitter)*gh});
+  }
+  const dc=Math.ceil(pts.length*lineP);
+
+  if(dc>1){
+    // Area fill
+    ctx.beginPath(); ctx.moveTo(gx,gy+gh);
+    for(let i=0;i<dc;i++) ctx.lineTo(pts[i].x,pts[i].y);
+    ctx.lineTo(pts[dc-1].x,gy+gh); ctx.closePath();
+    const ag=ctx.createLinearGradient(0,gy,0,gy+gh);
+    ag.addColorStop(0,rgba(C.green,0.32));
+    ag.addColorStop(1,rgba(C.green,0.02));
+    ctx.fillStyle=ag; ctx.fill();
+    // Line
+    ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+    for(let i=1;i<dc;i++) ctx.lineTo(pts[i].x,pts[i].y);
+    ctx.strokeStyle=C.green; ctx.lineWidth=3; ctx.stroke();
+    // Leading dot glow
+    const last=pts[dc-1];
+    ctx.beginPath(); ctx.arc(last.x,last.y,14,0,τ);
+    ctx.fillStyle=rgba(C.green,0.22); ctx.fill();
+    ctx.beginPath(); ctx.arc(last.x,last.y,6,0,τ);
+    ctx.fillStyle=C.green; ctx.fill();
+  }
+
+  // Big counter
+  const metVal=~~(36+64*easeOutCubic(lineP));
+  ctx.font='700 82px -apple-system,sans-serif';
+  ctx.fillStyle=C.green; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.shadowColor=C.green; ctx.shadowBlur=40;
+  ctx.fillText(`↑${metVal}%`,W/2,gy+gh+60);
+  ctx.shadowBlur=0;
+  ctx.font='400 12px monospace'; ctx.fillStyle=rgba(C.green,0.6);
+  ctx.fillText('EFFICIENCY GAIN',W/2,gy+gh+102);
+  ctx.restore();
+
+  const textA=easeOut(prog(ms,54200,55800))*(1-easeIn(prog(ms,57300,58000)));
+  drawText('Efficiency ↑ 60%',gy-40,textA,{size:24,color:C.green,weight:'700',glow:C.green});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE 8 — FINAL STATE  (58–60s)
+   Fully connected stable system, slow zoom-out, calm pulse
+   → "One system. Zero chaos."
+   → "Systems must talk. Or they fail."
+   → Fade to black (seamless loop back to CHAOS)
+═══════════════════════════════════════════════════════════ */
+function scene8(){
+  const p=sp(SCENES[7]);
+  const ep=easeOut(p);
+  // Fade to black at the end for seamless loop
+  const fo=easeIn(prog(ms,59200,60000));
+
+  drawBg(C.gold,0.022*(1-fo));
+
+  // Slow zoom-out
+  const scl=lerp(1.07,1.0,easeInOut(p));
+  const ox=(1-scl)*W/2, oy=(1-scl)*H/2;
+  ctx.save(); ctx.transform(scl,0,0,scl,ox,oy);
+
+  // Full unified network: 4 corners + API center + Queue
+  const fullNodes=[
+    {x:155, y:185, tool:TOOLS[0]},
+    {x:805, y:185, tool:TOOLS[1]},
+    {x:155, y:360, tool:TOOLS[2]},
+    {x:805, y:360, tool:TOOLS[3]},
+    {x:480, y:275, tool:TOOLS[4]}, // API center
+    {x:480, y:420, tool:TOOLS[5]}, // Queue
+  ];
+
+  const connAlpha=(1-fo);
+
+  // Connections: corners → API center
+  fullNodes.forEach((n,i)=>{
+    if(i>=4) return;
+    const ctr=fullNodes[4];
+    drawLine(
+      n.x>480?n.x-42:n.x+42, n.y,
+      ctr.x, ctr.y,
+      ep*connAlpha*0.55, n.tool.color
+    );
+  });
+  // Queue → API
+  drawLine(fullNodes[5].x,fullNodes[5].y-22,fullNodes[4].x,fullNodes[4].y+22,ep*connAlpha*0.45,TOOLS[5].color);
+  // Cross connections (subtle)
+  [[0,2],[1,3]].forEach(([a,b])=>{
+    drawLine(fullNodes[a].x,fullNodes[a].y,fullNodes[b].x,fullNodes[b].y,ep*connAlpha*0.14,C.mute,true);
+  });
+
+  // Breathing glow behind each node
+  fullNodes.forEach((n,i)=>{
+    const breathe=Math.sin(ms/950+i*0.8)*0.3+0.7;
+    ctx.save(); ctx.globalAlpha=ep*connAlpha*0.08;
+    ctx.beginPath(); ctx.arc(n.x,n.y,(i===4?32:22)*breathe*2,0,τ);
+    ctx.fillStyle=n.tool.color; ctx.fill(); ctx.restore();
+  });
+
+  // Draw nodes
+  fullNodes.forEach((n,i)=>{
+    drawNode(n.x,n.y,n.tool,ep*connAlpha*(i===4?1:0.88),i===4?1.12:0.92,i===4?0.5+0.45*Math.sin(ms/300):0.22);
+  });
+
+  // Traveling particles hub→corners
+  for(let i=0;i<4;i++){
+    const n=fullNodes[i];
+    const ctr=fullNodes[4];
+    const pp=((ms/1050+i*0.26)%1);
+    const px=lerp(n.x>480?n.x-42:n.x+42,ctr.x,pp);
+    const py=lerp(n.y,ctr.y,pp);
+    ctx.save(); ctx.globalAlpha=ep*connAlpha*0.78;
+    ctx.beginPath(); ctx.arc(px,py,2.5,0,τ);
+    ctx.fillStyle=n.tool.color; ctx.fill(); ctx.restore();
+  }
+
+  ctx.restore(); // end zoom transform
+
+  // "One system. Zero chaos."
+  const text1A=easeOut(prog(ms,58150,58750))*(1-fo);
+  drawText('One system. Zero chaos.',H/2-18,text1A,{size:30,color:C.gold,weight:'700',glow:C.saf});
+
+  // "Systems must talk. Or they fail."
+  const finalA=easeOut(prog(ms,58550,59100))*(1-fo);
+  if(finalA>0.01){
+    drawText('Systems must talk.',H/2+20,finalA,{size:22,color:C.white,weight:'300',glow:C.saf});
+    drawText('Or they fail.',H/2+50,finalA,{size:22,color:C.saf,weight:'700',glow:C.saf});
+  }
+
+  // Final black overlay — fades to black, loop restarts silently at chaos
+  if(fo>0.01){
+    ctx.save(); ctx.globalAlpha=fo;
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+    ctx.restore();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   RENDER DISPATCHER
+═══════════════════════════════════════════ */
+const RENDERERS=[scene1,scene2,scene3,scene4,scene5,scene6,scene7,scene8];
+
+function render(){
+  updateParticles();
+  const idx=SCENES.findIndex(s=>ms>=s.start&&ms<s.end);
+  const si=idx<0?RENDERERS.length-1:idx;
+  RENDERERS[si]();
+}
+
+/* ═══════════════════════════════════════════
+   ANIMATION LOOP — seamless auto-loop
+═══════════════════════════════════════════ */
+function frame(ts){
+  if(!t0) t0=ts;
+  ms=(ts-t0)%TOTAL;
+  render();
+  raf=requestAnimationFrame(frame);
+}
+
+raf=requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
